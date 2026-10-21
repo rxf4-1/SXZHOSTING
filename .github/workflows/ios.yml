@@ -1,0 +1,57 @@
+name: SXZ - Compilar iOS
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/ios.yml"
+      - "SXZHosting-0.2.0.zip"
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Extraer proyecto
+        run: unzip -q SXZHosting-0.2.0.zip -d source
+
+      - name: Preparar Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Mostrar version de Xcode
+        run: xcodebuild -version
+
+      - name: Preparar plataformas y verificar codigo
+        working-directory: source/rafahost
+        run: bash scripts/bootstrap-flutter.sh
+
+      - name: Compilar iOS sin firma
+        working-directory: source/rafahost/app
+        run: |
+          flutter build ios --release --no-codesign \
+            --dart-define=API_BASE_URL=https://hosting.example.com \
+            --dart-define=ADMOB_LIVE=false
+
+      - name: Empaquetar compilacion
+        working-directory: source/rafahost/app
+        run: |
+          ditto -c -k --keepParent \
+            build/ios/iphoneos/Runner.app \
+            SXZ-iOS-sin-firmar.zip
+
+      - name: Guardar resultado
+        uses: actions/upload-artifact@v4
+        with:
+          name: SXZ-iOS-sin-firmar
+          path: source/rafahost/app/SXZ-iOS-sin-firmar.zip
+          if-no-files-found: error
