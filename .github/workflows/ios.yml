@@ -1,57 +1,39 @@
-name: SXZ - Compilar iOS
-
-on:
-  workflow_dispatch:
-  push:
-    paths:
-      - ".github/workflows/ios.yml"
-      - "SXZHosting-0.2.0.zip"
-
-permissions:
-  contents: read
-
-jobs:
-  ios:
-    runs-on: macos-15
-    timeout-minutes: 45
-
-    steps:
-      - name: Descargar repositorio
-        uses: actions/checkout@v4
-
-      - name: Extraer proyecto
-        run: unzip -q SXZHosting-0.2.0.zip -d source
-
-      - name: Preparar Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
-      - name: Mostrar version de Xcode
-        run: xcodebuild -version
-
-      - name: Preparar plataformas y verificar codigo
+      - name: Corregir los cuatro avisos de Dart
         working-directory: source/rafahost
-        run: bash scripts/bootstrap-flutter.sh
-
-      - name: Compilar iOS sin firma
-        working-directory: source/rafahost/app
         run: |
-          flutter build ios --release --no-codesign \
-            --dart-define=API_BASE_URL=https://hosting.example.com \
-            --dart-define=ADMOB_LIVE=false
+          python3 - <<'PY'
+          from pathlib import Path
 
-      - name: Empaquetar compilacion
-        working-directory: source/rafahost/app
-        run: |
-          ditto -c -k --keepParent \
-            build/ios/iphoneos/Runner.app \
-            SXZ-iOS-sin-firmar.zip
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise RuntimeError(f"No se encontró el texto en {path}")
+              p.write_text(text.replace(old, new, 1))
 
-      - name: Guardar resultado
-        uses: actions/upload-artifact@v4
-        with:
-          name: SXZ-iOS-sin-firmar
-          path: source/rafahost/app/SXZ-iOS-sin-firmar.zip
-          if-no-files-found: error
+          replace(
+              "app/lib/data/reward_service.dart",
+              "if (!live) return defaultTargetPlatform",
+              "if (!live) { return defaultTargetPlatform",
+          )
+          replace(
+              "app/lib/data/reward_service.dart",
+              ": 'ca-app-pub-3940256099942544/5224354917';",
+              ": 'ca-app-pub-3940256099942544/5224354917'; }",
+          )
+          replace(
+              "app/lib/ui/hosting_model.dart",
+              "import 'dart:typed_data';",
+              "",
+          )
+          replace(
+              "app/lib/ui/hosting_model.dart",
+              "if (signedIn && !busy) run(() async { await loadServers(); if (selected != null) await loadDetail(); });",
+              "if (signedIn && !busy) { run(() async { await loadServers(); if (selected != null) await loadDetail(); }); }",
+          )
+          replace(
+              "app/lib/ui/screens.dart",
+              "if (action == 'rename') { final name = await askText(context,",
+              "if (action == 'rename') { if (!context.mounted) return; final name = await askText(context,",
+          )
+          PY
