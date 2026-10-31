@@ -1,12 +1,11 @@
 workflows:
   sxz-ios:
-    name: SXZ Hosting - Firma y TestFlight
+    name: SXZ Hosting - Firma y subida
     instance_type: mac_mini_m2
     max_build_duration: 60
 
     integrations:
-      # Nombre exacto de tu conexión Apple en Codemagic.
-      app_store_connect: "CAMBIA_POR_TU_CONEXION_APPLE"
+      app_store_connect: "SalmoNot"
 
     environment:
       flutter: stable
@@ -14,23 +13,21 @@ workflows:
       cocoapods: default
 
       ios_signing:
-        certificates:
-          - sxz_distribution
-        provisioning_profiles:
-          - sxz_appstore
+        distribution_type: app_store
+        bundle_identifier: com.rafastudio.sphost
 
       vars:
-        # Dirección real del backend, sin /api al final.
+        # Cambia esto por tu backend HTTPS, sin /api al final.
         API_BASE_URL: "https://TU-DOMINIO.com"
 
-        # Mantener false durante las primeras pruebas.
+        # Anuncios de prueba durante las primeras pruebas.
         ADMOB_LIVE: "false"
 
-        # Aumentar si ya existe un build con ese número en Apple.
+        # Permite aumentar la numeracion si fuera necesario.
         BUILD_OFFSET: "100"
 
     scripts:
-      - name: Verificar configuracion
+      - name: Comprobar configuracion
         script: |
           set -euo pipefail
 
@@ -47,7 +44,7 @@ workflows:
               or "TU-DOMINIO" in url.upper()
           ):
               raise SystemExit(
-                  "Configura API_BASE_URL con la URL HTTPS real del backend."
+                  "Cambia API_BASE_URL por tu backend HTTPS real."
               )
 
           if parsed.path.rstrip("/").endswith("/api"):
@@ -59,7 +56,7 @@ workflows:
           xcodebuild -version
           flutter --version
 
-      - name: Extraer proyecto
+      - name: Extraer SXZ Hosting
         script: |
           set -euo pipefail
 
@@ -69,7 +66,7 @@ workflows:
           test -f \
             "$CM_BUILD_DIR/source/rafahost/app/pubspec.yaml"
 
-      - name: Corregir los cuatro avisos de Dart
+      - name: Corregir avisos de Dart
         script: |
           set -euo pipefail
           cd "$CM_BUILD_DIR/source/rafahost"
@@ -119,12 +116,49 @@ workflows:
           )
           PY
 
-      - name: Preparar plataformas y comprobar Flutter
+      - name: Preparar plataformas y verificar Flutter
         script: |
           set -euo pipefail
           cd "$CM_BUILD_DIR/source/rafahost"
 
           bash scripts/bootstrap-flutter.sh
+
+      - name: Configurar identificador y nombre
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/source/rafahost/app"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import plistlib
+
+          project = Path(
+              "ios/Runner.xcodeproj/project.pbxproj"
+          )
+          text = project.read_text()
+
+          if "dev.rafa.rafahost" not in text:
+              raise SystemExit(
+                  "No se encontró el Bundle ID original."
+              )
+
+          project.write_text(
+              text.replace(
+                  "dev.rafa.rafahost",
+                  "com.rafastudio.sphost",
+              )
+          )
+
+          plist = Path("ios/Runner/Info.plist")
+
+          with plist.open("rb") as file:
+              data = plistlib.load(file)
+
+          data["CFBundleDisplayName"] = "SXZ Hosting"
+
+          with plist.open("wb") as file:
+              plistlib.dump(data, file)
+          PY
 
       - name: Instalar dependencias iOS
         script: |
@@ -133,14 +167,14 @@ workflows:
 
           pod install
 
-      - name: Aplicar certificado y perfil de SXZ
+      - name: Aplicar firma de Apple
         script: |
           set -euo pipefail
           cd "$CM_BUILD_DIR/source/rafahost/app"
 
           xcode-project use-profiles
 
-      - name: Compilar IPA firmado
+      - name: Generar IPA firmado
         script: |
           set -euo pipefail
           cd "$CM_BUILD_DIR/source/rafahost/app"
@@ -154,7 +188,7 @@ workflows:
             --dart-define="API_BASE_URL=$API_BASE_URL" \
             --dart-define="ADMOB_LIVE=$ADMOB_LIVE"
 
-      - name: Preparar IPA para descarga y subida
+      - name: Preparar archivo SXZHosting.ipa
         script: |
           set -euo pipefail
           cd "$CM_BUILD_DIR/source/rafahost/app"
@@ -167,7 +201,7 @@ workflows:
 
           if len(files) != 1:
               raise SystemExit(
-                  f"Se esperaba un IPA, pero se encontraron {len(files)}."
+                  f"Se esperaba un IPA. Encontrados: {len(files)}"
               )
 
           destination = Path("dist")
@@ -186,8 +220,5 @@ workflows:
     publishing:
       app_store_connect:
         auth: integration
-
-        # El IPA se sube a App Store Connect.
-        # Estas opciones controlan el envío a revisión.
         submit_to_testflight: false
         submit_to_app_store: false
