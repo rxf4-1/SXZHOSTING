@@ -1,0 +1,193 @@
+workflows:
+  sxz-ios:
+    name: SXZ Hosting - Firma y TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+
+    integrations:
+      # Nombre exacto de tu conexión Apple en Codemagic.
+      app_store_connect: "CAMBIA_POR_TU_CONEXION_APPLE"
+
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+
+      ios_signing:
+        certificates:
+          - sxz_distribution
+        provisioning_profiles:
+          - sxz_appstore
+
+      vars:
+        # Dirección real del backend, sin /api al final.
+        API_BASE_URL: "https://TU-DOMINIO.com"
+
+        # Mantener false durante las primeras pruebas.
+        ADMOB_LIVE: "false"
+
+        # Aumentar si ya existe un build con ese número en Apple.
+        BUILD_OFFSET: "100"
+
+    scripts:
+      - name: Verificar configuracion
+        script: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import os
+          from urllib.parse import urlparse
+
+          url = os.environ["API_BASE_URL"]
+          parsed = urlparse(url)
+
+          if (
+              parsed.scheme != "https"
+              or not parsed.hostname
+              or "TU-DOMINIO" in url.upper()
+          ):
+              raise SystemExit(
+                  "Configura API_BASE_URL con la URL HTTPS real del backend."
+              )
+
+          if parsed.path.rstrip("/").endswith("/api"):
+              raise SystemExit(
+                  "API_BASE_URL debe indicarse sin /api al final."
+              )
+          PY
+
+          xcodebuild -version
+          flutter --version
+
+      - name: Extraer proyecto
+        script: |
+          set -euo pipefail
+
+          unzip -q "$CM_BUILD_DIR/SXZHosting-0.2.0.zip" \
+            -d "$CM_BUILD_DIR/source"
+
+          test -f \
+            "$CM_BUILD_DIR/source/rafahost/app/pubspec.yaml"
+
+      - name: Corregir los cuatro avisos de Dart
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/source/rafahost"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              file = Path(path)
+              text = file.read_text()
+
+              if old not in text:
+                  raise RuntimeError(
+                      f"No se encontró el texto esperado en {path}"
+                  )
+
+              file.write_text(text.replace(old, new, 1))
+
+          replace(
+              "app/lib/data/reward_service.dart",
+              "if (!live) return defaultTargetPlatform",
+              "if (!live) { return defaultTargetPlatform",
+          )
+
+          replace(
+              "app/lib/data/reward_service.dart",
+              ": 'ca-app-pub-3940256099942544/5224354917';",
+              ": 'ca-app-pub-3940256099942544/5224354917'; }",
+          )
+
+          replace(
+              "app/lib/ui/hosting_model.dart",
+              "import 'dart:typed_data';",
+              "",
+          )
+
+          replace(
+              "app/lib/ui/hosting_model.dart",
+              "if (signedIn && !busy) run(() async { await loadServers(); if (selected != null) await loadDetail(); });",
+              "if (signedIn && !busy) { run(() async { await loadServers(); if (selected != null) await loadDetail(); }); }",
+          )
+
+          replace(
+              "app/lib/ui/screens.dart",
+              "if (action == 'rename') { final name = await askText(context,",
+              "if (action == 'rename') { if (!context.mounted) return; final name = await askText(context,",
+          )
+          PY
+
+      - name: Preparar plataformas y comprobar Flutter
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/source/rafahost"
+
+          bash scripts/bootstrap-flutter.sh
+
+      - name: Instalar dependencias iOS
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/source/rafahost/app/ios"
+
+          pod install
+
+      - name: Aplicar certificado y perfil de SXZ
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/source/rafahost/app"
+
+          xcode-project use-profiles
+
+      - name: Compilar IPA firmado
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/source/rafahost/app"
+
+          sxz_build_number=$((BUILD_OFFSET + BUILD_NUMBER + 1))
+
+          flutter build ipa \
+            --release \
+            --build-number="$sxz_build_number" \
+            --export-options-plist="$HOME/export_options.plist" \
+            --dart-define="API_BASE_URL=$API_BASE_URL" \
+            --dart-define="ADMOB_LIVE=$ADMOB_LIVE"
+
+      - name: Preparar IPA para descarga y subida
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/source/rafahost/app"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          files = list(Path("build/ios/ipa").glob("*.ipa"))
+
+          if len(files) != 1:
+              raise SystemExit(
+                  f"Se esperaba un IPA, pero se encontraron {len(files)}."
+              )
+
+          destination = Path("dist")
+          destination.mkdir(exist_ok=True)
+
+          shutil.copy2(
+              files[0],
+              destination / "SXZHosting.ipa",
+          )
+          PY
+
+    artifacts:
+      - source/rafahost/app/dist/SXZHosting.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      app_store_connect:
+        auth: integration
+
+        # El IPA se sube a App Store Connect.
+        # Estas opciones controlan el envío a revisión.
+        submit_to_testflight: false
+        submit_to_app_store: false
