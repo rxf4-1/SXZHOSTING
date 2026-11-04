@@ -17,13 +17,8 @@ workflows:
         bundle_identifier: com.rafastudio.sphost
 
       vars:
-        # Cambia esto por tu backend HTTPS, sin /api al final.
         API_BASE_URL: "https://sxz.rafastudio.tech"
-
-        # Anuncios de prueba durante las primeras pruebas.
         ADMOB_LIVE: "false"
-
-        # Permite aumentar la numeracion si fuera necesario.
         BUILD_OFFSET: "100"
 
     scripts:
@@ -43,14 +38,10 @@ workflows:
               or not parsed.hostname
               or "TU-DOMINIO" in url.upper()
           ):
-              raise SystemExit(
-                  "Cambia API_BASE_URL por tu backend HTTPS real."
-              )
+              raise SystemExit("Configura una URL HTTPS real.")
 
           if parsed.path.rstrip("/").endswith("/api"):
-              raise SystemExit(
-                  "API_BASE_URL debe indicarse sin /api al final."
-              )
+              raise SystemExit("La URL debe indicarse sin /api al final.")
           PY
 
           xcodebuild -version
@@ -119,8 +110,10 @@ workflows:
       - name: Preparar plataformas y verificar Flutter
         script: |
           set -euo pipefail
-          cd "$CM_BUILD_DIR/source/rafahost"
 
+          flutter config --no-enable-swift-package-manager
+
+          cd "$CM_BUILD_DIR/source/rafahost"
           bash scripts/bootstrap-flutter.sh
 
       - name: Configurar identificador y nombre
@@ -132,15 +125,11 @@ workflows:
           from pathlib import Path
           import plistlib
 
-          project = Path(
-              "ios/Runner.xcodeproj/project.pbxproj"
-          )
+          project = Path("ios/Runner.xcodeproj/project.pbxproj")
           text = project.read_text()
 
           if "dev.rafa.rafahost" not in text:
-              raise SystemExit(
-                  "No se encontró el Bundle ID original."
-              )
+              raise SystemExit("No se encontró el Bundle ID original.")
 
           project.write_text(
               text.replace(
@@ -163,9 +152,32 @@ workflows:
       - name: Instalar dependencias iOS
         script: |
           set -euo pipefail
-          cd "$CM_BUILD_DIR/source/rafahost/app/ios"
+          cd "$CM_BUILD_DIR/source/rafahost/app"
 
-          pod install
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          file = Path("ios/Podfile")
+          text = file.read_text()
+
+          pattern = r"(?m)^[ \t]*#?[ \t]*platform[ \t]+:ios[^\n]*"
+
+          if re.search(pattern, text):
+              text = re.sub(
+                  pattern,
+                  "platform :ios, '15.0'",
+                  text,
+              )
+          else:
+              text = "platform :ios, '15.0'\n" + text
+
+          file.write_text(text)
+          PY
+
+          flutter pub get
+          cd ios
+          pod install --repo-update
 
       - name: Aplicar firma de Apple
         script: |
