@@ -41,7 +41,9 @@ workflows:
               raise SystemExit("Configura una URL HTTPS real.")
 
           if parsed.path.rstrip("/").endswith("/api"):
-              raise SystemExit("La URL debe indicarse sin /api al final.")
+              raise SystemExit(
+                  "La URL debe indicarse sin /api al final."
+              )
           PY
 
           xcodebuild -version
@@ -116,7 +118,7 @@ workflows:
           cd "$CM_BUILD_DIR/source/rafahost"
           bash scripts/bootstrap-flutter.sh
 
-      - name: Configurar identificador y nombre
+      - name: Configurar identificador nombre y permiso de Fotos
         script: |
           set -euo pipefail
           cd "$CM_BUILD_DIR/source/rafahost/app"
@@ -125,11 +127,15 @@ workflows:
           from pathlib import Path
           import plistlib
 
-          project = Path("ios/Runner.xcodeproj/project.pbxproj")
+          project = Path(
+              "ios/Runner.xcodeproj/project.pbxproj"
+          )
           text = project.read_text()
 
           if "dev.rafa.rafahost" not in text:
-              raise SystemExit("No se encontró el Bundle ID original.")
+              raise SystemExit(
+                  "No se encontró el Bundle ID original."
+              )
 
           project.write_text(
               text.replace(
@@ -144,6 +150,11 @@ workflows:
               data = plistlib.load(file)
 
           data["CFBundleDisplayName"] = "SXZ Hosting"
+
+          data["NSPhotoLibraryUsageDescription"] = (
+              "Permite seleccionar fotos para subirlas como archivos "
+              "al servidor que administras."
+          )
 
           with plist.open("wb") as file:
               plistlib.dump(data, file)
@@ -161,7 +172,9 @@ workflows:
           file = Path("ios/Podfile")
           text = file.read_text()
 
-          pattern = r"(?m)^[ \t]*#?[ \t]*platform[ \t]+:ios[^\n]*"
+          pattern = (
+              r"(?m)^[ \t]*#?[ \t]*platform[ \t]+:ios[^\n]*"
+          )
 
           if re.search(pattern, text):
               text = re.sub(
@@ -193,6 +206,12 @@ workflows:
 
           sxz_build_number=$((BUILD_OFFSET + BUILD_NUMBER + 1))
 
+          if [ "$sxz_build_number" -le 106 ]; then
+            echo "El nuevo build debe ser mayor que 106."
+            echo "Aumenta BUILD_OFFSET y ejecuta un nuevo build."
+            exit 1
+          fi
+
           flutter build ipa \
             --release \
             --build-number="$sxz_build_number" \
@@ -200,14 +219,16 @@ workflows:
             --dart-define="API_BASE_URL=$API_BASE_URL" \
             --dart-define="ADMOB_LIVE=$ADMOB_LIVE"
 
-      - name: Preparar archivo SXZHosting.ipa
+      - name: Verificar permiso dentro del IPA
         script: |
           set -euo pipefail
           cd "$CM_BUILD_DIR/source/rafahost/app"
 
           python3 - <<'PY'
           from pathlib import Path
+          import plistlib
           import shutil
+          import zipfile
 
           files = list(Path("build/ios/ipa").glob("*.ipa"))
 
@@ -216,11 +237,45 @@ workflows:
                   f"Se esperaba un IPA. Encontrados: {len(files)}"
               )
 
+          ipa = files[0]
+
+          with zipfile.ZipFile(ipa) as archive:
+              candidates = [
+                  name for name in archive.namelist()
+                  if name.startswith("Payload/")
+                  and name.endswith(".app/Info.plist")
+                  and name.count("/") == 2
+              ]
+
+              if len(candidates) != 1:
+                  raise SystemExit(
+                      "No se pudo identificar el Info.plist principal."
+                  )
+
+              info = plistlib.loads(
+                  archive.read(candidates[0])
+              )
+
+          purpose = info.get(
+              "NSPhotoLibraryUsageDescription", ""
+          )
+
+          if not isinstance(purpose, str) or not purpose.strip():
+              raise SystemExit(
+                  "Falta el permiso de Fotos dentro del IPA."
+              )
+
+          if info.get("CFBundleIdentifier") != "com.rafastudio.sphost":
+              raise SystemExit("El IPA tiene un Bundle ID incorrecto.")
+
+          print("Permiso de Fotos verificado dentro del IPA.")
+          print("Build:", info.get("CFBundleVersion"))
+
           destination = Path("dist")
           destination.mkdir(exist_ok=True)
 
           shutil.copy2(
-              files[0],
+              ipa,
               destination / "SXZHosting.ipa",
           )
           PY
