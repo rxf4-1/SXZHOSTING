@@ -18,7 +18,7 @@ workflows:
 
       vars:
         # Cambia esto por tu backend HTTPS, sin /api al final.
-        API_BASE_URL: "https://salmonotes.com"
+        API_BASE_URL: "https://sxz.rafastudio.tech"
 
         # Anuncios de prueba durante las primeras pruebas.
         ADMOB_LIVE: "false"
