@@ -1,0 +1,86 @@
+workflows:
+  sxz-ios:
+    name: SXZ Hosting 0.3 - Firma y subida
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: "SalmoNot"
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.rafastudio.sphost
+      vars:
+        API_BASE_URL: "https://sxz.rafastudio.tech"
+        ADMOB_LIVE: "false"
+        BUILD_OFFSET: "200"
+    scripts:
+      - name: Extraer SXZ 0.3
+        script: |
+          set -euo pipefail
+          unzip -q "$CM_BUILD_DIR/SXZHosting-0.3.0.zip" -d "$CM_BUILD_DIR/source"
+          test -f "$CM_BUILD_DIR/source/rafahost/app/pubspec.yaml"
+      - name: Preparar y verificar Flutter
+        script: |
+          set -euo pipefail
+          xcodebuild -version
+          cd "$CM_BUILD_DIR/source/rafahost"
+          bash scripts/bootstrap-flutter.sh
+      - name: Instalar dependencias iOS
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/source/rafahost/app/ios"
+          pod install --repo-update
+      - name: Aplicar firma de Apple
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/source/rafahost/app"
+          xcode-project use-profiles
+      - name: Generar IPA firmado
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/source/rafahost/app"
+          sxz_build_number=$((BUILD_OFFSET + BUILD_NUMBER + 1))
+          flutter build ipa --release \
+            --build-number="$sxz_build_number" \
+            --export-options-plist="$HOME/export_options.plist" \
+            --dart-define="API_BASE_URL=$API_BASE_URL" \
+            --dart-define="ADMOB_LIVE=$ADMOB_LIVE"
+      - name: Verificar IPA y preparar entrega
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/source/rafahost/app"
+          python3 - <<'PY'
+          from pathlib import Path
+          import plistlib
+          import shutil
+          import zipfile
+          ipas = list(Path('build/ios/ipa').glob('*.ipa'))
+          if len(ipas) != 1:
+              raise SystemExit('Se esperaba un solo IPA.')
+          with zipfile.ZipFile(ipas[0]) as archive:
+              paths = [p for p in archive.namelist() if p.startswith('Payload/') and p.endswith('.app/Info.plist') and p.count('/') == 2]
+              if len(paths) != 1:
+                  raise SystemExit('No se encontró el Info.plist principal.')
+              info = plistlib.loads(archive.read(paths[0]))
+          if info.get('CFBundleIdentifier') != 'com.rafastudio.sphost':
+              raise SystemExit('Bundle ID incorrecto.')
+          if info.get('CFBundleShortVersionString') != '0.3.0':
+              raise SystemExit('Versión incorrecta.')
+          purpose = info.get('NSPhotoLibraryUsageDescription')
+          if not isinstance(purpose, str) or not purpose.strip():
+              raise SystemExit('Falta la explicación de acceso a Fotos.')
+          Path('dist').mkdir(exist_ok=True)
+          shutil.copy2(ipas[0], 'dist/SXZHosting.ipa')
+          print('IPA verificado. Build:', info.get('CFBundleVersion'))
+          PY
+    artifacts:
+      - source/rafahost/app/dist/SXZHosting.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: false
+        submit_to_app_store: false
